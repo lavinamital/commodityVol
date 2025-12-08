@@ -8,11 +8,10 @@ execute:
   message: false
 
 book:
-  title: "YOUR PROJECT TITLE"
+  title: "Commodity Volatility"
   author:
-    - AUTHOR1 (UNI1)
-    - AUTHOR2 (UNI2)
-  repo-url: https://github.com/YOUR_GITHUB_ACCOUNT/REPO_NAME
+    - Lavina Mital (lm4046)
+  repo-url: https://github.com/lavinamital/commodityVol
   date: today
   page-footer:
     right: |
