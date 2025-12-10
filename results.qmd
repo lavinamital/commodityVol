@@ -1,1 +1,454 @@
 # Results
+
+```{r}
+
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(readr)
+library(dplyr)
+library(slider)
+library(ggplot2)
+library(tibble)
+
+commod_raw <- readr::read_rds("data/raw/commodities_raw.rds")
+dplyr::glimpse(commod_raw)
+
+```
+
+
+```{r}
+
+events <- tibble::tibble(
+  event_id   = c("covid", "ukraine", "israel_hamas"),
+  event_name = c(
+    "WHO declares COVID-19 pandemic",
+    "Russia invades Ukraine",
+    "Hamas attack on Israel (Oct 7)"
+  ),
+  event_date = as.Date(c("2020-03-11", "2022-02-24", "2023-10-07"))
+)
+
+events
+
+```
+
+```{r}
+
+tag_events <- function(data, events_tbl, window_days = 120) {
+  data |>
+    crossing(events_tbl) |>
+    mutate(
+      days_from_event = as.integer(date - event_date),
+      in_window = abs(days_from_event) <= window_days
+    ) |>
+    filter(in_window) |>
+    mutate(
+      period = if_else(days_from_event < 0, "before", "after"),
+      period = factor(period, levels = c("before", "after"))
+    ) |>
+    select(ticker, date, price, ret_simple, ret_log, volume,
+           event_id, event_name, event_date, days_from_event, period)
+}
+
+commod_events <- tag_events(commod_raw, events, window_days = 120)
+
+dplyr::glimpse(commod_events)
+
+```
+
+```{r}
+
+commod_indexed <- commod_raw |>
+  group_by(ticker) |>
+  arrange(date, .by_group = TRUE) |>
+  mutate(
+    index_price = price / first(price) * 100
+  ) |>
+  ungroup()
+
+ggplot(commod_indexed, aes(x = date, y = index_price, color = ticker)) +
+  geom_line(alpha = 0.8) +
+  scale_color_manual(
+    values = c("CL=F" = "#1b9e77", "GC=F" = "#d95f02", "NG=F" = "#7570b3"),
+    labels = c("CL=F" = "Crude Oil (WTI)", "GC=F" = "Gold", "NG=F" = "Natural Gas")
+  ) +
+  labs(
+    title = "Commodity Prices Indexed to 100 (2014–present)",
+    x = "Date",
+    y = "Index (Start = 100)",
+    color = "Commodity"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+Indexing the three commodities to 100 in 2014 allows us to compare their movements on the same scale since the true market values for each of these assets varies significantly based on value and demand in the global marketplace. Gold shows the most consistent upward trend, with sharp increases during periods of global uncertainty such as 2020 and 2024–2025. This is why Gold is thought to always be the most safe and stable investment, no matter the economic climate. Crude oil displays large event-driven swings—most notably the collapse during early 2020 and volatility surrounding the Russia–Ukraine invasion. Natural gas is the most erratic and volatile, with frequent spikes and crashes tied to supply disruptions and seasonal demand. Overall, Gold behaves like a steady safe-haven asset, while oil and natural gas react more dramatically to geopolitical matters and market shocks.
+
+```{r}
+
+ggplot(commod_raw, aes(x = ret_log, color = ticker, fill = ticker)) +
+  geom_density(alpha = 0.25) +
+  scale_color_manual(
+    values = c("CL=F" = "#1b9e77", "GC=F" = "#d95f02", "NG=F" = "#7570b3"),
+    labels = c("CL=F" = "Crude Oil (WTI)", "GC=F" = "Gold", "NG=F" = "Natural Gas")
+  ) +
+  scale_fill_manual(
+    values = c("CL=F" = "#1b9e77", "GC=F" = "#d95f02", "NG=F" = "#7570b3"),
+    labels = c("CL=F" = "Crude Oil (WTI)", "GC=F" = "Gold", "NG=F" = "Natural Gas")
+  ) +
+  labs(
+    title = "Distribution of Daily Log Returns (2014–present)",
+    x = "Daily log return",
+    y = "Density",
+    color = "Commodity",
+    fill = "Commodity"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+The distribution of daily log returns differs noticeably across commodities. Gold has the sharpest, narrowest peak centered at zero, reflecting its role as a low-volatility safe-haven asset. Crude oil and natural gas show wider distributions, indicating more day-to-day price variability. Natural gas shows the heaviest tails, consistent with its tendency toward extreme price swings driven by supply shocks and seasonal demand. Overall, these distributions highlight that the three commodities respond very differently to global events, like the graph above emphasized as well. Using log returns instead of actual plain price differences ensures comparability across assets with different price levels and provides a scale-free measure of daily percentage changes. This way we can ensure our comparisons are fair and unbiased, and is done repeatedly in the following graphs. 
+
+```{r}
+
+ggplot(commod_raw, aes(x = ticker, y = ret_log, fill = ticker)) +
+  geom_boxplot(alpha = 0.7, outlier_alpha = 0.4) +
+  scale_fill_manual(
+    values = c("CL=F" = "#1b9e77", "GC=F" = "#d95f02", "NG=F" = "#7570b3"),
+    labels = c("CL=F" = "Crude Oil (WTI)", "GC=F" = "Gold", "NG=F" = "Natural Gas")
+  ) +
+  scale_x_discrete(labels = c("CL=F" = "Crude Oil (WTI)", "GC=F" = "Gold", "NG=F" = "Natural Gas")) +
+  labs(
+    title = "Daily Log Return Volatility Across Commodities",
+    x = "Commodity",
+    y = "Daily log return"
+  ) +
+  theme_minimal(base_size = 14)
+```
+The boxplots highlight clear differences in volatility across the three commodities. Gold shows a very tight distribution with minimal outliers, reflecting its stable, low-volatility behavior. Crude oil displays moderate dispersion with occasional large moves tied to geopolitical shocks and shifts in global demand. Natural gas shows the widest spread and the most extreme outliers, underscoring its susceptibility to abrupt weather-driven or supply-driven price swings. 
+
+```{r}
+#| fig.width: 10
+#| fig.height: 6
+
+rolling_vol <- commod_raw |>
+  group_by(ticker) |>
+  arrange(date, .by_group = TRUE) |>
+  mutate(
+    roll_vol = slide_dbl(ret_log, sd, .before = 29, .complete = TRUE)
+  ) |>
+  ungroup()
+
+event_dates <- tibble(
+  event = c(
+    "COVID-19\npandemic declared",
+    "Russia invades\nUkraine",
+    "Israel–Hamas\nescalation"
+  ),
+  date = as.Date(c("2020-03-11", "2022-02-24", "2023-10-07"))
+)
+
+max_roll <- max(rolling_vol$roll_vol, na.rm = TRUE)
+
+event_dates <- event_dates |>
+  mutate(y = max_roll * 0.75)
+
+ggplot(rolling_vol, aes(x = date, y = roll_vol, color = ticker)) +
+  geom_line(alpha = 0.9, na.rm = TRUE) +
+  geom_vline(
+    data = event_dates,
+    aes(xintercept = date),
+    linetype = "dashed",
+    color = "black"
+  ) +
+  geom_text(
+    data = event_dates,
+    aes(x = date, y = y, label = event),
+    color = "black",
+    angle = 90,
+    vjust = 0.5,
+    hjust = 0,
+    size = 3
+  ) +
+  scale_color_manual(
+    values = c(
+      "CL=F" = "#1b9e77",  # Crude Oil (WTI)
+      "GC=F" = "#d95f02",  # Gold
+      "NG=F" = "#7570b3"   # Natural Gas
+    ),
+    labels = c(
+      "CL=F" = "Crude Oil (WTI)",
+      "GC=F" = "Gold",
+      "NG=F" = "Natural Gas"
+    )
+  ) +
+  labs(
+    title = "Rolling 30-Day Volatility of Daily Log Returns",
+    x = "Date",
+    y = "Rolling 30-Day Standard Deviation",
+    color = "Commodity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title.position = "plot",
+    plot.margin = margin(t = 15, r = 40, b = 10, l = 10)
+  )
+
+
+```
+The 30-day rolling volatility plot shows clear spikes in commodity risk during major global events. Natural gas exhibits the highest and most frequent volatility surges, reflecting its sensitivity to supply disruptions and geopolitical risk. Oil shows sharp but less persistent volatility spikes, particularly during the COVID-19 shock and the early phase of the Russia–Ukraine conflict. Gold remains the most stable of the three commodities, with muted volatility changes even during large global shocks—consistent with its behavior as a safe-haven asset. These patterns highlight that not all commodities react equally to global crises, and volatility can reveal more about market stress than prices alone.
+
+```{r}
+#| fig.width: 10
+#| fig.height: 6
+
+returns_wide <- commod_raw |>
+  select(date, ticker, ret_log) |>
+  pivot_wider(
+    names_from = ticker,
+    values_from = ret_log
+  ) |>
+  arrange(date)
+
+rolling_corr <- returns_wide |>
+  mutate(
+    corr_oil_ng = slide2_dbl(
+      .x = `CL=F`, .y = `NG=F`,
+      .before = 89, .complete = TRUE,
+      .f = ~ cor(.x, .y, use = "complete.obs")
+    ),
+    corr_oil_gold = slide2_dbl(
+      .x = `CL=F`, .y = `GC=F`,
+      .before = 89, .complete = TRUE,
+      .f = ~ cor(.x, .y, use = "complete.obs")
+    ),
+    corr_gold_ng = slide2_dbl(
+      .x = `GC=F`, .y = `NG=F`,
+      .before = 89, .complete = TRUE,
+      .f = ~ cor(.x, .y, use = "complete.obs")
+    )
+  ) |>
+  select(date, corr_oil_ng, corr_oil_gold, corr_gold_ng) |>
+  pivot_longer(
+    cols = starts_with("corr_"),
+    names_to = "pair",
+    values_to = "corr"
+  ) |>
+  mutate(
+    pair = recode(
+      pair,
+      corr_oil_ng   = "Oil–Natural Gas",
+      corr_oil_gold = "Oil–Gold",
+      corr_gold_ng  = "Gold–Natural Gas"
+    )
+  )
+
+ggplot(rolling_corr, aes(x = date, y = corr, color = pair)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey60") +
+  geom_line(na.rm = TRUE, alpha = 0.9) +
+  scale_color_manual(
+    values = c(
+      "Oil–Natural Gas"   = "#1b9e77",
+      "Oil–Gold"          = "#d95f02",
+      "Gold–Natural Gas"  = "#7570b3"
+    ),
+    name = "Pair"
+  ) +
+  coord_cartesian(ylim = c(-1, 1)) +
+  labs(
+    title = "90-Day Rolling Correlations of Daily Log Returns",
+    x = "Date",
+    y = "Correlation"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+```
+The rolling 90-day correlations show how tightly linked these commodity markets are over time. The Oil–Natural Gas pair typically has the strongest and most consistently positive correlation, reflecting their shared exposure to global energy demand and supply shocks. Correlations involving Gold are generally lower and more unstable, which fits the idea that gold behaves differently from energy markets and sometimes moves independently as a safe-haven asset. Around major events highlighted earlier, correlations shift noticeably, suggesting that crises can temporarily pull markets together or push them apart depending on the nature of the shock.
+
+```{r}
+
+returns_wide <- commod_raw |>
+  filter(!is.na(ret_log)) |>
+  select(date, ticker, ret_log) |>
+  tidyr::pivot_wider(
+    names_from  = ticker,
+    values_from = ret_log
+  ) |>
+  arrange(date)
+
+rolling_corr_long <- slider::slide_dfr(
+  .x = 1:nrow(returns_wide),
+  .before = 89,         # 90-day window
+  .complete = TRUE,
+  .f = ~ {
+    window_rows <- .x
+    window <- returns_wide[window_rows, c("CL=F", "GC=F", "NG=F")]
+
+    cmat <- cor(window, use = "pairwise.complete.obs")
+
+    last_date <- returns_wide$date[max(window_rows)]
+
+    tibble::tibble(
+      date = rep(last_date, 3),
+      pair = c("Oil–Gold", "Oil–Natural Gas", "Gold–Natural Gas"),
+      corr = c(
+        cmat["CL=F", "GC=F"],
+        cmat["CL=F", "NG=F"],
+        cmat["GC=F", "NG=F"]
+      )
+    )
+  }
+)
+
+corr_heat <- rolling_corr_long |>
+  dplyr::mutate(month = lubridate::floor_date(date, "month")) |>
+  dplyr::group_by(month, pair) |>
+  dplyr::summarise(corr = mean(corr, na.rm = TRUE), .groups = "drop")
+
+ggplot(corr_heat,
+       aes(x = month, y = pair, fill = corr)) +
+  geom_tile() +
+  scale_fill_gradient2(
+    limits = c(-1, 1),
+    midpoint = 0,
+    name = "Correlation"
+  ) +
+  scale_x_date(
+    date_breaks = "1 year",
+    date_labels = "%Y"
+  ) +
+  labs(
+    title = "Monthly 90-Day Rolling Correlations of Daily Log Returns",
+    x = "Date",
+    y = "Commodity Pair"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title.position = "plot"
+  )
+
+
+```
+This heatmap provides a higher-level view of how correlation relationships between commodities evolve over time by aggregating the 90-day rolling correlations into monthly averages. While the earlier line graph showed noisy day-to-day fluctuations, this visualization shows more stable structural patterns, such as Oil–Gold correlations frequently turning mildly positive during stressed periods (light purple) and Gold–Natural Gas occasionally going slighlty negative (light red) during commodity-specific shocks. Notably, the darker purple patches around 2020–2022 for Oil–Natural Gas align with the COVID-19 shock and subsequent energy-market disruptions, reinforcing insights from the line plot but in a more interpretable, pattern-oriented format. By smoothing volatility and emphasizing temporal regimes rather than individual movements, the heatmap strengthens our narrative that commodity relationships shift meaningfully in response to global events rather than remaining stable over time.
+
+```{r, fig.width=14, fig.height=8}
+
+event_dates_win <- event_dates |>
+  dplyr::rename(event_date = date)
+
+vol_with_events <- rolling_vol |>
+  tidyr::crossing(event_dates_win) |>
+  mutate(
+    event_day = as.integer(date - event_date)
+  ) |>
+  filter(event_day >= -60, event_day <= 60)
+
+vol_event_window <- vol_with_events |>
+  group_by(event, ticker) |>
+  mutate(
+    baseline     = mean(roll_vol[event_day < -10], na.rm = TRUE),
+    abnormal_vol = roll_vol - baseline
+  ) |>
+  ungroup()
+
+ggplot(vol_event_window,
+       aes(x = event_day, y = abnormal_vol, color = ticker)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey40") +
+  geom_line(alpha = 0.9, linewidth = 0.8) +
+  facet_wrap(~ event, scales = "free_y") +
+  scale_color_manual(
+    values = c(
+      "CL=F" = "#1b9e77",  # Crude Oil (WTI)
+      "GC=F" = "#d95f02",  # Gold
+      "NG=F" = "#7570b3"   # Natural Gas
+    ),
+    labels = c(
+      "CL=F" = "Crude Oil (WTI)",
+      "GC=F" = "Gold",
+      "NG=F" = "Natural Gas"
+    )
+  ) +
+  labs(
+    title  = "Abnormal Volatility Around Major Global Events",
+    x      = "Days Relative to Event",
+    y      = "Volatility Above Baseline\n(30-day SD minus pre-event mean)",
+    color  = "Commodity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+  strip.text = element_text(size = 15, face = "bold"),
+  panel.spacing = unit(2, "lines")
+)
+
+```
+Abnormal volatility patterns differ sharply across global shocks, and each commodity responds in ways consistent with its economic role. During the COVID-19 declaration, oil experiences an extreme surge in volatility as demand collapsed and supply uncertainty grew, while gold and natural gas show only moderate increases. The Israel–Hamas escalation produces a much smaller and more contained market reaction, with modest volatility rises concentrated in oil and gold. The Russian invasion of Ukraine triggers the largest natural gas volatility spike in the sample, reflecting Europe’s dependence on Russian supply, alongside a notable jump in oil volatility. Overall, different events activate different market channels, revealing how commodity-specific fundamentals shape volatility responses.
+
+
+```{r, fig.width=14, fig.height=8}
+
+#| label: cum-returns-events
+#| fig.cap: "Cumulative returns around major global events (day −1 = 0)."
+
+window <- 60  # event window in days
+
+returns_with_events <- commod_raw |>
+  tidyr::crossing(event_dates_win) |>
+  mutate(
+    event_day = as.integer(date - event_date) 
+  ) |>
+  filter(event_day >= -window, event_day <= window)
+
+
+ret_event_window <- returns_with_events |>
+  group_by(event, ticker) |>
+  arrange(event_day, .by_group = TRUE) |>
+  mutate(
+    ret_log = tidyr::replace_na(ret_log, 0),
+    cum_log = cumsum(ret_log),
+    pre_event = if_else(
+      any(event_day == -1),
+      cum_log[event_day == -1][1],
+      cum_log[event_day == 0][1]  
+    ),
+    cum_log_rel = cum_log - pre_event,
+    cum_return_pct = exp(cum_log_rel) - 1
+  ) |>
+  ungroup()
+
+ggplot(ret_event_window,
+       aes(x = event_day, y = cum_return_pct, color = ticker)) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ event, scales = "free_y") +
+  scale_color_manual(
+    values = c(
+      "CL=F" = "#1b9e77",  # Crude Oil (WTI)
+      "GC=F" = "#d95f02",  # Gold
+      "NG=F" = "#7570b3"   # Natural Gas
+    ),
+    labels = c(
+      "CL=F" = "Crude Oil (WTI)",
+      "GC=F" = "Gold",
+      "NG=F" = "Natural Gas"
+    )
+  ) +
+  labs(
+    title = "Cumulative Returns Around Major Global Events",
+    x = "Days Relative to Event",
+    y = "Cumulative return since day −1",
+    color = "Commodity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+  strip.text = element_text(size = 15, face = "bold"),
+  panel.spacing = unit(2, "lines")
+)
+
+```
+These graphs track cumulative returns over a 120-day window around each crisis (60 days before, 60 days after), setting day −1 to zero so we can compare how each commodity moves through the event. Gold tends to drift upward during each event, consistent with its role as a safe-haven asset. Oil and natural gas show much sharper swings: both sell off around COVID-19 but rally strongly around the Ukraine invasion, while the Israel–Hamas escalation produces more muted but still positive moves. Together with the volatility plots, this graph shows that crises do not just increase risk; they systematically reprice commodities in different directions, with natural gas and oil reacting most strongly and gold providing steadier, more defensive performance (as expected).
+
+## Non technical summary:
+
+The analysis above shows that crude oil, gold, and natural gas behave very differently over time and respond differently to major global events. Gold is the most stable, oil shows moderate swings, and natural gas is the most volatile. During crises—such as COVID-19 and the Russia–Ukraine invasion—volatility spikes sharply for natural gas and oil, while gold remains relatively steady. We also find that relationships between commodities shift over time: oil and natural gas often move together, while gold tends to act independently. It is additionally important to note that the nature of the crisis will also play a role in how the assets move long term, while the initial reactions can be repetitive. Overall, the results reveal clear differences in each commodity’s risk profile and how strongly each reacts to global shocks.
+

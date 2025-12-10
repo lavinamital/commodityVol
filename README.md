@@ -1,2 +1,1 @@
-Delete the content of this **README** and add a short description of your project in its place. If you're working locally, be sure to commit and push the changes to GitHub.
-
+Visual analysis of commodity price behavior before and after major global events, focusing on how gold, oil, and natural gas react to periods of geopolitical uncertainty.
