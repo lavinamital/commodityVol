@@ -73,7 +73,6 @@ missing_over_time <- commod_raw |>
     .groups = "drop"
   )
 
-
 ggplot() +
   geom_line(
     data = missing_over_time,
